@@ -6,10 +6,12 @@ spread from the market's own recent volatility:
 
     q_tau(h) = clamp(x + z_tau * sigma * h**0.42, 0, 1), rounded to 6 decimals
 
-sigma is the population standard deviation of the market's one-minute price
-moves over the last 2 hours, winsorized at +/-0.02 so a single jump in the
-estimation window does not blow the spread up. The exponent 0.42 (rather
-than the random-walk 0.5) reflects that these prices mean-revert: their
+sigma is a blend of the population standard deviation of the market's
+one-minute price moves over the last 2 hours (weight 0.7) and the last
+6 hours (weight 0.3), each winsorized at +/-0.025 so a single jump in the
+estimation window does not blow the spread up. Blending two windows makes
+the estimate steadier than either alone. The exponent 0.42 (rather than
+the random-walk 0.5) reflects that these prices mean-revert: their
 multi-step variance grows slower than the horizon. No drift: Polymarket
 prices are a martingale, and every drift we tried on the practice cases
 made the pinball loss worse.
@@ -27,8 +29,9 @@ OUTPUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
 
 QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95]
 Z = [-1.644854, -0.67449, 0.0, 0.67449, 1.644854]
-WINDOW_MINUTES = 120
-CLIP = 0.02
+# (window minutes, weight) of each volatility estimate; weights sum to 1.
+WINDOWS = [(120, 0.7), (360, 0.3)]
+CLIP = 0.025
 ALPHA = 0.42
 
 
@@ -37,9 +40,9 @@ def price6(x):
     return round(min(1.0, max(0.0, x)) * 1e6) / 1e6 + 0.0
 
 
-def sigma(prices):
-    """Winsorized std of 1-minute moves over the last WINDOW_MINUTES."""
-    seg = prices[-WINDOW_MINUTES:]
+def _winsor_std(prices, window):
+    """Winsorized std of 1-minute moves over the last `window` minutes."""
+    seg = prices[-window:]
     diffs = []
     for a, b in zip(seg, seg[1:]):
         d = b - a
@@ -54,6 +57,11 @@ def sigma(prices):
     mean = sum(diffs) / n
     var = sum((d - mean) ** 2 for d in diffs) / n
     return math.sqrt(var)
+
+
+def sigma(prices):
+    """Blended winsorized volatility over the recent windows."""
+    return sum(w * _winsor_std(prices, win) for win, w in WINDOWS)
 
 
 def forecast(market, horizon):
